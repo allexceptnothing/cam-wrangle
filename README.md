@@ -2,7 +2,7 @@
 
 
 ## Concept
-Take ownership of as many of the settings and as much of the colour pipeline for Logitech C930e webcam as possible, then pass the stream on as a device.
+Take ownership of as many of the settings and as much of the colour pipeline for Logitech C930e webcam as possible, then pass the stream on as a camera device.
 Built for Linux Mint 22.3
 
 
@@ -42,3 +42,4 @@ Built for Linux Mint 22.3
 ## Helpers
 "v4l2-ctl --list-devices"
 "v4l2-ctl -d /dev/video0 --list-formats-ext"
+
