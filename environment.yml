@@ -1,0 +1,14 @@
+name: cam_wrangle
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - moderngl
+  - glfw
+  - numpy=1.26.4
+  - opencv
+  - pip
+  - pip:
+    - glfw
+    - opencolorio
