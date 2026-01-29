@@ -7,19 +7,27 @@ DATA_PATH = os.path.join(ROOT_PATH, "data")
 PYTHON_PATH = os.path.join(ROOT_PATH, "python")
 OCIO_PATH = os.path.join(ROOT_PATH, "ocio")
 
+SETTINGS_FILE = os.path.join(DATA_PATH, "camera_settings.json")
 
 OCIO_CONFIG = os.path.join(OCIO_PATH, "studio-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio")
 OCIO_SPACES = {
     "input": "sRGB Encoded Rec.709 (sRGB)",
     "working": "ACEScg",
-    "display": "sRGB - Display",
+    "display_device": "sRGB - Display",
+    "view": "ACES 2.0 - SDR 100 nits (Rec.709)"
 }
+COLOUR_DOWNSAMPLING = {
+    "width": 1280,
+    "height": 720
+}
+
+HORIZONTAL_FLOP = True
 
 CAMERA_DEVICE = "/dev/video0"
 
 FORMAT = {
     "width": 1920,
-    "height": 1080,
+    "height": 1080  ,
     "pixelformat": "MJPG",
     "fps": 30,
 }
@@ -36,5 +44,3 @@ CONTROLS = {
     "focus_automatic_continuous": 0,
     "focus_absolute": 0,
 }
-
-print("test")
