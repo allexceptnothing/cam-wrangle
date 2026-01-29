@@ -28,11 +28,13 @@ CONTROLS = {
     "auto_exposure": 1,
     "exposure_dynamic_framerate": 0,
     "exposure_time_absolute": 300,
-    "gain": 156,
+    "gain": 20,
 
     "white_balance_automatic": 0,
-    "white_balance_temperature": 4000,
+    "white_balance_temperature": 3650,
 
     "focus_automatic_continuous": 0,
     "focus_absolute": 0,
 }
+
+print("test")

@@ -5,58 +5,76 @@ import PyOpenColorIO as OCIO
 
 
 class OcioPipeline:
-    def __init__(self, config_path: str, input_space: str, working_space: str, display_space: str):
+    def __init__(self, config_path, input_space, working_space, display_space, lut_path=None):
         self.config = OCIO.Config.CreateFromFile(config_path)
-        self.in_cpu  = self.config.getProcessor(input_space, working_space).getDefaultCPUProcessor()
-        self.out_cpu = self.config.getProcessor(working_space, display_space).getDefaultCPUProcessor()
+        self.params = (input_space, working_space, display_space, lut_path)
+        self.last_state = None
+        self.cpu_proc = None
 
-    def apply_in_to_work_inplace(self, rgb_flat_n3: np.ndarray) -> None:
-        self.in_cpu.applyRGB(rgb_flat_n3)
+    def update_processor(self, r, g, b, gain, force=False):
+        # Only rebuild if values actually changed
+        current_state = (r, g, b, gain)
+        if current_state == self.last_state and not force:
+            return
 
-    def apply_work_to_disp_inplace(self, rgb_flat_n3: np.ndarray) -> None:
-        self.out_cpu.applyRGB(rgb_flat_n3)
+        in_sp, work_sp, disp_sp, lut_path = self.params
+        group = OCIO.GroupTransform()
 
-    def get_colourspace_names(self):
-        return list(self.config.getColorSpaceNames())
+        # 1. IDT
+        group.appendTransform(OCIO.ColorSpaceTransform(src=in_sp, dst=work_sp))
+
+        # 2. White Balance / Gain Matrix
+        m44 = [r * gain, 0, 0, 0, 0, g * gain, 0, 0, 0, 0, b * gain, 0, 0, 0, 0, 1]
+        group.appendTransform(OCIO.MatrixTransform(m44))
+
+        # 3. Optional LUT (with Log conversion if needed)
+        if lut_path:
+            # Move to Log space for the LUT if it's a creative film LUT
+            group.appendTransform(OCIO.ColorSpaceTransform(src=work_sp, dst="ACEScct"))
+            group.appendTransform(OCIO.FileTransform(src=lut_path, interpolation=OCIO.INTERP_TETRAHEDRAL))
+            group.appendTransform(OCIO.ColorSpaceTransform(src="ACEScct", dst=work_sp))
+
+        # 4. ODT
+        group.appendTransform(OCIO.ColorSpaceTransform(src=work_sp, dst=disp_sp))
+
+        self.cpu_proc = self.config.getProcessor(group).getDefaultCPUProcessor()
+        self.last_state = current_state
+
+    def apply_inplace(self, rgb_flat):
+        self.cpu_proc.applyRGB(rgb_flat)
 
 
 class ColourPipeline:
     def __init__(self, width: int, height: int, ocio_pipe):
-        self.w = width
-        self.h = height
         self.ocio = ocio_pipe
+        # Pre-allocate everything once
+        self.f32_buffer = np.empty((height, width, 3), dtype=np.float32)
+        self.u8_buffer = np.empty((height, width, 3), dtype=np.uint8)
 
-        # Single working/display buffer (RGB float32)
-        self.rgb = np.empty((height, width, 3), dtype=np.float32)
-        self.rgb_flat = self.rgb.reshape(-1, 3)
+    def process_bgr_u8(self, frame_bgr_u8, temp, tint, gain):
+        # 1. BGR u8 -> RGB f32 (The correct way)
+        # We use .astype but keep it efficient by using the pre-allocated buffer
+        # Note: cv2.cvtColor can handle the u8->f32 shift if we scale after
+        self.f32_buffer = frame_bgr_u8.astype(np.float32)
+        cv2.multiply(self.f32_buffer, 1.0/255.0, dst=self.f32_buffer)
+        cv2.cvtColor(self.f32_buffer, cv2.COLOR_BGR2RGB, dst=self.f32_buffer)
 
-        # Output buffer (BGR uint8)
-        self.bgr_out = np.empty((height, width, 3), dtype=np.uint8)
 
-    def process_bgr_u8(self, frame_bgr_u8: np.ndarray, temp: float, tint: float, gain: float) -> np.ndarray:
-        # 1) copy BGR u8 -> BGR float32 in-place
-        np.multiply(frame_bgr_u8, (1.0 / 255.0), out=self.rgb, casting="unsafe")  # writes into rgb as float32
+        # 2. Update OCIO (Lazy update)
+        r, g, b = wb_multipliers_from_temp_tint(temp, tint)
+        self.ocio.update_processor(r, g, b, gain * 4.5)
 
-        # 2) swap BGR->RGB in-place (swap channels 0 and 2)
-        self.rgb[..., [0, 2]] = self.rgb[..., [2, 0]]
+        # 3. Apply OCIO
+        # Ensure we are passing the pointer to the same memory
+        self.ocio.apply_inplace(self.f32_buffer.reshape(-1, 3))
 
-        # OCIO input->working (in-place)
-        self.ocio.apply_in_to_work_inplace(self.rgb_flat)
+        # 4. RGB f32 -> BGR u8
+        # We MUST clamp before converting to u8 to prevent wrap-around (artifacting)
+        np.clip(self.f32_buffer, 0, 1, out=self.f32_buffer)
+        cv2.cvtColor(self.f32_buffer, cv2.COLOR_RGB2BGR, dst=self.f32_buffer)
 
-        # Grade in-place (RGB)
-        wb = wb_multipliers_from_temp_tint(temp, tint)
-        self.rgb *= wb
-        self.rgb *= (gain * 4.5)
-
-        # OCIO working->display (in-place)  (reuses same buffer)
-        self.ocio.apply_work_to_disp_inplace(self.rgb_flat)
-
-        # Clamp + pack to BGR u8 (no alloc)
-        np.clip(self.rgb, 0.0, 1.0, out=self.rgb)
-        self.bgr_out[...] = (self.rgb[..., ::-1] * 255.0 + 0.5).astype(np.uint8)
-
-        return self.bgr_out
-
+        # Final scale to 255 and cast
+        return (self.f32_buffer * 255.0).astype(np.uint8)
 
 def wb_multipliers_from_temp_tint(temp: float, tint: float, slider_strength=0.5) -> np.ndarray:
     r = 1.0 + temp * slider_strength
